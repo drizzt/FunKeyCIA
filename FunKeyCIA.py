@@ -13,7 +13,7 @@ import datetime
 from collections import namedtuple
 from collections import Counter
 
-from Crypto.Cipher import AES
+from py3AES import AESModeOfOperation
 
 if not sys.version_info[:2] == (2, 7):
     print '*****\n!!!!!Warning - Only tested with Python 2.7!!!!!\n*****\n'
@@ -171,14 +171,17 @@ def checkTitle(titleid, deckey):
 	    raise SystemExit(1)
 
 	# set IV to offset 0xf0 length 0x10 of ciphertext; thanks to yellows8 for the offset
-	check_temp_perm = check_temp.read()
-	decryptor = AES.new(binascii.unhexlify(deckey), AES.MODE_CBC, check_temp_perm[0xf0:0x100])
-	# check for magic ('NCCH') at offset 0x100 length 0x104 of the decrypted content
-	check_temp_out = decryptor.decrypt(check_temp_perm)[0x100:0x104]
+	check_temp_perm = list(bytearray(check_temp.read()))
+
+	aes_iv = list(bytearray(check_temp_perm[0xf0:0x100]))
+	aes_key = list(bytearray(binascii.unhexlify(deckey)))
+
+	moo = AESModeOfOperation()
+	check_temp_out = moo.decrypt(check_temp_perm, 260, moo.ModeOfOperation['CBC'], aes_key, moo.aes.KeySize["SIZE_128"], aes_iv)[0x100:0x104]
 
 	if 'NCCH' not in check_temp_out.decode('UTF-8', 'ignore'):
-	    decryptor = AES.new(binascii.unhexlify(deckey), AES.MODE_CBC, binascii.unhexlify(c_idx + '0000000000000000000000000000'))
-	    dsi_check_temp_out = decryptor.decrypt(check_temp_perm)[0x60:0x64]
+	    iv = list(bytearray(binascii.unhexlify(c_idx + '0000000000000000000000000000')))
+	    dsi_check_temp_out = moo.decrypt(check_temp_perm, 260, moo.ModeOfOperation['CBC'], aes_key , moo.aes.KeySize["SIZE_128"], aes_iv)[0x60:0x64]
 	if 'NCCH' not in check_temp_out.decode('UTF-8', 'ignore') and 'WfA' not in dsi_check_temp_out.decode('UTF-8', 'ignore'):
 	    print('\nERROR: Decryption failed; invalid titlekey?')
 	    raise SystemExit(1)
