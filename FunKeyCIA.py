@@ -13,6 +13,8 @@ import datetime
 from collections import namedtuple
 from collections import Counter
 
+from Crypto.Cipher import AES
+
 if not sys.version_info[:2] == (2, 7):
     print '*****\n!!!!!Warning - Only tested with Python 2.7!!!!!\n*****\n'
 
@@ -132,7 +134,56 @@ if arguments.key is not None:
 if badinput: #if any input was not ok, quit
     sys.exit(0)
 
+# Refactored from PlaiCDN
+def checkTitle(titleid, deckey):
+    # set CDN default URL
+    base_url = 'http://ccs.cdn.c.shop.nintendowifi.net/ccs/download/' + titleid
 
+    # download tmd and set to 'tmd_var' object
+    try:
+	tmd_var = urllib2.urlopen(base_url + '/tmd')
+    except IOError as e:
+	print('ERROR: Bad title ID?')
+	raise SystemExit(1)
+    tmd_var = tmd_var.read()
+
+    content_count = unpack('>H', tmd_var[0x206:0x208])[0]
+
+    # Download Contents
+    fSize = 16384
+    for i in range(content_count):
+	c_offs = 0xB04+(0x30*i)
+	c_id = format(unpack('>I', tmd_var[c_offs:c_offs+4])[0], '08x')
+	c_idx = format(unpack('>H', tmd_var[c_offs+4:c_offs+6])[0], '04x')
+	c_size = format(unpack('>Q', tmd_var[c_offs+8:c_offs+16])[0], 'd')
+	c_hash = tmd_var[c_offs+16:c_offs+48]
+	# If content count above 8 (not a normal application), don't make 3ds
+	if unpack('>H', tmd_var[c_offs+4:c_offs+6])[0] >= 8:
+	    make_3ds = 0
+	print 'Downloading and decrypting the first 272 bytes of ' + c_id + ' for key check...'
+	# use range requests to download bytes 0 through 271, needed 272 instead of 260 because AES-128-CBC encrypts in chunks of 128 bits
+	try:
+	    check_req = urllib2.Request('%s/%s'%(base_url, c_id))
+	    check_req.headers['Range'] = 'bytes=%s-%s' % (0, 271)
+	    check_temp = urllib2.urlopen(check_req)
+	except IOError as e:
+	    print('ERROR: Possibly wrong container?\n')
+	    raise SystemExit(1)
+
+	# set IV to offset 0xf0 length 0x10 of ciphertext; thanks to yellows8 for the offset
+	check_temp_perm = check_temp.read()
+	decryptor = AES.new(binascii.unhexlify(deckey), AES.MODE_CBC, check_temp_perm[0xf0:0x100])
+	# check for magic ('NCCH') at offset 0x100 length 0x104 of the decrypted content
+	check_temp_out = decryptor.decrypt(check_temp_perm)[0x100:0x104]
+
+	if 'NCCH' not in check_temp_out.decode('UTF-8', 'ignore'):
+	    decryptor = AES.new(binascii.unhexlify(deckey), AES.MODE_CBC, binascii.unhexlify(c_idx + '0000000000000000000000000000'))
+	    dsi_check_temp_out = decryptor.decrypt(check_temp_perm)[0x60:0x64]
+	if 'NCCH' not in check_temp_out.decode('UTF-8', 'ignore') and 'WfA' not in dsi_check_temp_out.decode('UTF-8', 'ignore'):
+	    print('\nERROR: Decryption failed; invalid titlekey?')
+	    raise SystemExit(1)
+	print 'Titlekey successfully verified to match title ID ' + titleid + '...'
+	print ''
 
 
 def processContent(titleid, key):
@@ -249,28 +300,29 @@ print '*******\nFunKeyCIA by cearp\n*******\n'
 
 
 if (arguments.nfskeyfile):
-    print 'Downloading encTitleKeys.bin from 3ds.nfshost.com...'
-    url = 'http://3ds.nfshost.com/downloadenc'
-    for attempt in range(arguments.retry_count+1):
-        try:
-            if(attempt > 0):
-                print '*Attempt ' + str(attempt+1) + ' of ' + str(arguments.retry_count+1)
-            thekeyfile = urllib2.urlopen(url)
-        except urllib2.URLError, e:
-            print 'Could not download file...'
-            error = True
-            continue
-        error = False
-        break
+    for x in ['enc', 'dec']:
+        print 'Downloading ' + x + 'TitleKeys.bin from 3ds.nfshost.com...'
+        url = 'http://3ds.nfshost.com/download' + ( 'enc' if x == 'enc' else '' )
+        for attempt in range(arguments.retry_count+1):
+            try:
+                if(attempt > 0):
+                    print '*Attempt ' + str(attempt+1) + ' of ' + str(arguments.retry_count+1)
+                thekeyfile = urllib2.urlopen(url)
+            except urllib2.URLError, e:
+                print 'Could not download file...'
+                error = True
+                continue
+            error = False
+            break
 
-    if error:
-        print 'ERROR: Could not download file. Skipping title...\n'
+        if error:
+            print 'ERROR: Could not download file. Skipping title...\n'
 
-    if not error:
-        print ''
-        thekeyfile = thekeyfile.read()
-        open(os.path.join('encTitleKeys.bin'),'wb').write(thekeyfile)
-        print 'Downloaded encTitleKeys.bin OK!'
+        if not error:
+            print ''
+            thekeyfile = thekeyfile.read()
+            open(os.path.join(x + 'TitleKeys.bin'),'wb').write(thekeyfile)
+            print 'Downloaded ' + x + 'TitleKeys.bin OK!'
 
 
 
@@ -279,6 +331,16 @@ if (arguments.localkeyfile) or (arguments.nfskeyfile):
     if not os.path.isfile('encTitleKeys.bin'):
         print 'The input file encTitleKeys.bin does not exist.'
         sys.exit(0)
+    if arguments.nfskeyfile:
+        with open('decTitleKeys.bin', 'rb') as keybin:
+            keybin.seek(0x10)
+            for block in iter(lambda: keybin.read(0x20), ""):
+                titleid = binascii.hexlify(block[0x8:0x10])
+                key = binascii.hexlify(block[0x10:0x20])
+
+		if arguments.all or (titleid in titlelist):
+                    checkTitle(titleid, key)
+
     with open('encTitleKeys.bin', 'rb') as keybin:
         keybin.seek(0x10)
         for block in iter(lambda: keybin.read(0x20), ""):
