@@ -334,7 +334,7 @@ if (arguments.localkeyfile) or (arguments.nfskeyfile):
     if not os.path.isfile('encTitleKeys.bin'):
         print 'The input file encTitleKeys.bin does not exist.'
         sys.exit(0)
-    if arguments.nfskeyfile:
+    if os.path.isfile('decTitleKeys.bin'):
         with open('decTitleKeys.bin', 'rb') as keybin:
             keybin.seek(0x10)
             for block in iter(lambda: keybin.read(0x20), ""):
